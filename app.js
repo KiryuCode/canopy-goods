@@ -1,0 +1,1063 @@
+/**
+ * Canopy Goods — basic webstore (Node.js / Express).
+ *
+ * Run:
+ *   npm install
+ *   # ensure MySQL is running and ocean is initialized (see README)
+ *   npm start
+ *
+ * Then open http://127.0.0.1:3000
+ * Admin: http://127.0.0.1:3000/admin
+ */
+
+const fs = require("fs");
+const path = require("path");
+
+// Always load .env next to this file (PM2/systemd cwd can differ after reboot)
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const express = require("express");
+const session = require("express-session");
+const multer = require("multer");
+const db = require("./db");
+const cart = require("./cart");
+const mail = require("./mail");
+const csrf = require("./csrf");
+const {
+  STORE_NAME,
+  STORE_NAME_ALT,
+  STORE_TAGLINE,
+  MAX_ORDERS_PER_IP,
+  PORT,
+  HOST,
+  ADMIN_PASSWORD,
+  ADMIN_PASSWORD_HASH,
+  SITE_URL,
+  PLACEHOLDER_IMAGE,
+  formatPrice,
+  slugify,
+  buildSeo,
+  getSitemapEntries,
+} = require("./config");
+
+const BCRYPT_ROUNDS = 12;
+// Never accept this as a live password — it was the old built-in default.
+const REJECTED_ADMIN_PASSWORD = "ocean-admin-2024";
+
+/**
+ * Resolve the bcrypt hash used to verify admin logins.
+ * Prefer ADMIN_PASSWORD_HASH; otherwise hash ADMIN_PASSWORD at boot.
+ * Missing env must not open admin with a built-in password.
+ */
+function resolveAdminPasswordHash() {
+  if (ADMIN_PASSWORD_HASH) {
+    return ADMIN_PASSWORD_HASH;
+  }
+  if (ADMIN_PASSWORD) {
+    if (ADMIN_PASSWORD === REJECTED_ADMIN_PASSWORD) {
+      throw new Error(
+        "ADMIN_PASSWORD is a known insecure value. " +
+          "Set a strong ADMIN_PASSWORD or ADMIN_PASSWORD_HASH in .env."
+      );
+    }
+    return bcrypt.hashSync(ADMIN_PASSWORD, BCRYPT_ROUNDS);
+  }
+  throw new Error(
+    "Set ADMIN_PASSWORD or ADMIN_PASSWORD_HASH in .env. " +
+      "Refusing to start with a built-in default password."
+  );
+}
+
+const adminPasswordHash = resolveAdminPasswordHash();
+
+const app = express();
+app.disable("x-powered-by");
+
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self'",
+].join("; ");
+
+function isHttpsRequest(req) {
+  return Boolean(req.secure) || req.get("x-forwarded-proto") === "https";
+}
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  if (isHttpsRequest(req)) {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains"
+    );
+  }
+  next();
+});
+
+// Correct client IPs / secure cookies when reverse-proxied (nginx, Caddy, etc.)
+if (process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true") {
+  app.set("trust proxy", 1);
+}
+
+const uploadsDir = path.join(__dirname, "public", "uploads", "products");
+fs.mkdirSync(uploadsDir, { recursive: true });
+
+// Image uploads for product photos (admin only)
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
+      const safeExt = [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext)
+        ? ext
+        : ".jpg";
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed (jpeg, png, gif, webp)."));
+    }
+  },
+});
+
+// Views & static assets
+app.set("view engine", "ejs");
+app.set("views", path.join(__dirname, "views"));
+app.use(express.static(path.join(__dirname, "public")));
+app.use(express.urlencoded({ extended: false }));
+
+const isProd = process.env.NODE_ENV === "production";
+
+app.use(
+  session({
+    name: "canopy.sid",
+    secret: process.env.SESSION_SECRET || "change-me-canopy-goods-session",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: "lax",
+      // Set cookie Secure flag when served over HTTPS (requires TRUST_PROXY behind TLS)
+      secure: process.env.COOKIE_SECURE === "1" || process.env.COOKIE_SECURE === "true",
+    },
+  })
+);
+
+app.use((req, res, next) => {
+  if (req.path !== "/healthz") {
+    res.locals.csrfToken = csrf.getCsrfToken(req);
+  } else {
+    res.locals.csrfToken = "";
+  }
+  next();
+});
+app.use(csrf.csrfProtect);
+
+app.use(async (req, res, next) => {
+  try {
+    const settings = await db.getStoreSettings({
+      storeName: STORE_NAME,
+      storeTagline: STORE_TAGLINE,
+    });
+    res.locals.storeName = settings.storeName;
+    res.locals.storeTagline = settings.storeTagline;
+  } catch (err) {
+    res.locals.storeName = STORE_NAME;
+    res.locals.storeTagline = STORE_TAGLINE;
+  }
+  res.locals.maxOrdersPerIp = MAX_ORDERS_PER_IP;
+  res.locals.formatPrice = formatPrice;
+  res.locals.flashError = null;
+  res.locals.cartCount = cart.cartCount(cart.getCart(req));
+  // Defaults so success/confirm templates never hit "is not defined"
+  res.locals.email = null;
+  res.locals.phone = null;
+  // Site-wide SEO defaults (routes override with buildSeo("pageKey"))
+  res.locals.seo = buildSeo();
+  res.locals.customer = req.session && req.session.customer
+    ? req.session.customer
+    : null;
+  next();
+});
+
+// Ready only after MySQL init. Bind HTTP first so PM2 always has a live PID
+// (avoids "pidusage … pids provided is invalid" when the process exits on boot).
+let appReady = false;
+
+app.get("/healthz", (_req, res) => {
+  if (appReady) {
+    return res.status(200).json({ ok: true });
+  }
+  return res.status(503).json({ ok: false, reason: "starting" });
+});
+
+app.use((req, res, next) => {
+  if (appReady) return next();
+  // Static assets already handled above; gate app routes until DB is ready
+  res.set("Retry-After", "5");
+  if (req.accepts("html")) {
+    return res
+      .status(503)
+      .type("html")
+      .send(
+        "<!doctype html><meta charset=utf-8><title>Starting</title>" +
+          "<p>Canopy Goods is starting up. Please retry in a few seconds.</p>"
+      );
+  }
+  return res.status(503).type("text").send("Service starting, please retry shortly.\n");
+});
+
+// ---------------------------------------------------------------------------
+// SEO: robots.txt + sitemap.xml
+// ---------------------------------------------------------------------------
+
+app.get("/robots.txt", (_req, res) => {
+  const body = [
+    "User-agent: *",
+    "Allow: /",
+    "Disallow: /admin",
+    "Disallow: /admin/",
+    "Disallow: /cart",
+    "Disallow: /cart/",
+    "Disallow: /buy/",
+    "Disallow: /order",
+    `Sitemap: ${SITE_URL}/sitemap.xml`,
+    "",
+  ].join("\n");
+  res.type("text/plain").send(body);
+});
+
+app.get("/sitemap.xml", (_req, res) => {
+  const entries = getSitemapEntries();
+  const urls = entries
+    .map(
+      (e) => `  <url>
+    <loc>${escapeXml(e.loc)}</loc>
+    <changefreq>${escapeXml(e.changefreq)}</changefreq>
+    <priority>${escapeXml(e.priority)}</priority>
+  </url>`
+    )
+    .join("\n");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>
+`;
+  res.type("application/xml").send(xml);
+});
+
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function clientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  let ip =
+    typeof forwarded === "string" && forwarded.length > 0
+      ? forwarded.split(",")[0].trim()
+      : req.socket.remoteAddress || "unknown";
+
+  if (ip.startsWith("::ffff:")) {
+    ip = ip.slice(7);
+  }
+  return ip;
+}
+
+function isAdminSession(req) {
+  return Boolean(req.session && req.session.isAdmin);
+}
+
+function requireAdmin(req, res) {
+  if (!isAdminSession(req)) {
+    res.status(401).render("admin_login", {
+      invalidPassword: false,
+      seo: buildSeo("admin"),
+    });
+    return false;
+  }
+  return true;
+}
+
+async function verifyAdminPassword(password) {
+  try {
+    if (typeof password !== "string" || password.length === 0) {
+      // Dummy compare so a missing password takes roughly the same time.
+      await bcrypt.compare(crypto.randomBytes(32).toString("hex"), adminPasswordHash);
+      return false;
+    }
+    return await bcrypt.compare(password, adminPasswordHash);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build an admin URL, optionally targeting a section tab via hash.
+ * Examples: adminUrl() · adminUrl({ hash: "orders" })
+ */
+function adminUrl({ hash = "orders" } = {}) {
+  let url = "/admin";
+  if (hash) url += `#${hash}`;
+  return url;
+}
+
+function publicUploadPath(filename) {
+  return `/uploads/products/${filename}`;
+}
+
+// ---------------------------------------------------------------------------
+// Shop
+// ---------------------------------------------------------------------------
+
+app.get("/", async (req, res, next) => {
+  try {
+    const products = await db.listProducts();
+    const categories = [];
+    const seen = new Map();
+    for (const product of products) {
+      const name = product.category || "Shop";
+      if (!seen.has(name)) {
+        const group = { name, products: [] };
+        seen.set(name, group);
+        categories.push(group);
+      }
+      seen.get(name).products.push(product);
+    }
+    res.render("index", {
+      products,
+      categories,
+      seo: buildSeo("home"),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Cart
+// ---------------------------------------------------------------------------
+
+app.get("/cart", async (req, res, next) => {
+  try {
+    const items = await cart.getCartItems(cart.getCart(req));
+    res.render("cart", {
+      items,
+      total: cart.cartTotal(items),
+      seo: buildSeo("cart"),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/cart/add", async (req, res, next) => {
+  try {
+    const productId = String(req.body.product_id || "").trim();
+    const product = await db.getProduct(productId);
+    const wantsJson =
+      req.xhr ||
+      (req.headers.accept || "").includes("application/json") ||
+      req.body.ajax === "1";
+
+    if (!product) {
+      if (wantsJson) {
+        return res.status(404).json({ ok: false, error: "Product not found" });
+      }
+      return res.status(404).render("404", { seo: buildSeo("notFound") });
+    }
+
+    await cart.addToCart(req, productId, 1);
+    const cartCount = cart.cartCount(cart.getCart(req));
+
+    // AJAX add-to-cart: stay on page (no scroll jump)
+    if (wantsJson) {
+      return res.json({ ok: true, cartCount, productId: product.id });
+    }
+
+    const redirectTo = req.body.redirect || "/";
+    if (redirectTo === "cart") {
+      return res.redirect("/cart");
+    }
+    return res.redirect("/");
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/cart/update", async (req, res, next) => {
+  try {
+    const productId = String(req.body.product_id || "").trim();
+    const quantity = req.body.quantity;
+    await cart.setCartQuantity(req, productId, quantity);
+    return res.redirect("/cart");
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/cart/remove", (req, res) => {
+  const productId = String(req.body.product_id || "").trim();
+  cart.removeFromCart(req, productId);
+  return res.redirect("/cart");
+});
+
+app.get("/cart/checkout", async (req, res, next) => {
+  try {
+    const items = await cart.getCartItems(cart.getCart(req));
+    if (items.length === 0) {
+      return res.redirect("/cart");
+    }
+
+    const ip = clientIp(req);
+    if (!(await db.canPlaceOrder(ip))) {
+      return res.status(429).render("limit", {
+        product: null,
+        items,
+        seo: buildSeo("limit"),
+      });
+    }
+
+    res.render("confirm", {
+      mode: "cart",
+      product: null,
+      items,
+      total: cart.cartTotal(items),
+      seo: buildSeo("confirm", { title: "Confirm cart order" }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Buy Now + confirm
+// ---------------------------------------------------------------------------
+
+app.get("/buy/:productId", async (req, res, next) => {
+  try {
+    const product = await db.getProduct(req.params.productId);
+    if (!product) {
+      return res.status(404).render("404", { seo: buildSeo("notFound") });
+    }
+
+    const ip = clientIp(req);
+    if (!(await db.canPlaceOrder(ip))) {
+      return res.status(429).render("limit", {
+        product,
+        items: null,
+        seo: buildSeo("limit"),
+      });
+    }
+
+    res.render("confirm", {
+      mode: "buy_now",
+      product,
+      items: [{ product, quantity: 1, lineTotal: product.price }],
+      total: product.price,
+      seo: buildSeo("confirm", {
+        title: `Confirm order — ${product.name}`,
+        description: product.description
+          ? String(product.description).slice(0, 160)
+          : undefined,
+        image: product.image || undefined,
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/confirm", async (req, res, next) => {
+  try {
+    const mode = String(req.body.mode || "buy_now").trim();
+    const email = String(req.body.email || "").trim();
+    const phone = String(req.body.phone || "").trim();
+    const ip = clientIp(req);
+
+    let items = [];
+
+    if (mode === "cart") {
+      items = await cart.getCartItems(cart.getCart(req));
+      if (items.length === 0) {
+        return res.redirect("/cart");
+      }
+    } else {
+      const productId = String(req.body.product_id || "").trim();
+      const product = await db.getProduct(productId);
+      if (!product) {
+        return res.status(404).render("404", { seo: buildSeo("notFound") });
+      }
+      items = [{ product, quantity: 1, lineTotal: product.price }];
+    }
+
+    const { productId, productName } = cart.orderFieldsFromItems(items);
+    const total = cart.cartTotal(items);
+
+    try {
+      const orderId = await db.createOrder({
+        productId,
+        productName,
+        email: email || null,
+        phone: phone || null,
+        ipAddress: ip,
+      });
+
+      if (mode === "cart") {
+        cart.clearCart(req);
+      }
+
+      // Email HTML receipt to EMAIL_TO (non-blocking for the customer response)
+      const order = await db.getOrder(orderId);
+      if (order) {
+        const lineItems = await db.getOrderLineItems(order);
+        const subtotal = db.orderSubtotal(lineItems);
+        const hasPrices = lineItems.every((item) => item.unitPrice !== null);
+        mail
+          .sendOrderConfirmation({ order, lineItems, subtotal, hasPrices })
+          .catch((err) => {
+            console.error("[mail] Unexpected error sending confirmation:", err);
+          });
+      }
+
+      return res.render("success", {
+        orderId,
+        email: email || null,
+        phone: phone || null,
+        items,
+        total,
+        product: items.length === 1 ? items[0].product : null,
+        seo: buildSeo("success"),
+      });
+    } catch (err) {
+      return res.status(429).render("limit", {
+        product: items.length === 1 ? items[0].product : null,
+        items,
+        flashError: err.message,
+        seo: buildSeo("limit"),
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// Customer accounts (email register + return-customer sign-in)
+// ---------------------------------------------------------------------------
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function renderLogin(res, extra = {}) {
+  return res.render("login", {
+    invalid: false,
+    email: "",
+    seo: buildSeo("login"),
+    ...extra,
+  });
+}
+
+function renderRegister(res, extra = {}) {
+  return res.render("register", {
+    error: null,
+    email: "",
+    name: "",
+    seo: buildSeo("register"),
+    ...extra,
+  });
+}
+
+app.get("/login", (req, res) => {
+  if (req.session && req.session.customer) {
+    return res.redirect("/");
+  }
+  return renderLogin(res);
+});
+
+app.post("/login", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const password = String(req.body.password || "");
+    const customer = await db.getCustomerByEmail(email);
+    let ok = false;
+    if (customer && customer.passwordHash) {
+      ok = await bcrypt.compare(password, customer.passwordHash);
+    } else {
+      await bcrypt.compare(crypto.randomBytes(32).toString("hex"), adminPasswordHash);
+    }
+    if (!ok) {
+      return res.status(401).render("login", {
+        invalid: true,
+        email,
+        seo: buildSeo("login"),
+      });
+    }
+    req.session.customer = db.publicCustomer(customer);
+    return req.session.save((err) => {
+      if (err) return next(err);
+      const nextUrl = String(req.body.next || "/").trim() || "/";
+      return res.redirect(nextUrl.startsWith("/") ? nextUrl : "/");
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/register", (req, res) => {
+  if (req.session && req.session.customer) {
+    return res.redirect("/");
+  }
+  return renderRegister(res);
+});
+
+app.post("/register", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const password = String(req.body.password || "");
+    const name = String(req.body.name || "").trim();
+
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).render("register", {
+        error: "Enter a valid email address.",
+        email,
+        name,
+        seo: buildSeo("register"),
+      });
+    }
+    if (password.length < 8) {
+      return res.status(400).render("register", {
+        error: "Password must be at least 8 characters.",
+        email,
+        name,
+        seo: buildSeo("register"),
+      });
+    }
+    if (await db.getCustomerByEmail(email)) {
+      return res.status(409).render("register", {
+        error: "An account with that email already exists. Sign in instead.",
+        email,
+        name,
+        seo: buildSeo("register"),
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const customer = await db.createCustomer({ email, passwordHash, name });
+    req.session.customer = db.publicCustomer(customer);
+    return req.session.save((err) => {
+      if (err) return next(err);
+      return res.redirect("/");
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/logout", (req, res, next) => {
+  if (req.session) {
+    req.session.customer = null;
+  }
+  return req.session.save((err) => {
+    if (err) return next(err);
+    return res.redirect("/");
+  });
+});
+
+function renderStaticPage(pageKey, heading, bodyLines) {
+  return (req, res) => {
+    res.render("static", {
+      heading,
+      bodyLines,
+      seo: buildSeo(pageKey),
+    });
+  };
+}
+
+app.get("/about", renderStaticPage("about", "About Canopy Goods", [
+  "We are a small reef shop that sells what we would put in our own tanks: planted-tank stems and rhizomes, softies, LPS, SPS, zoas, anemones, a short list of livestock, and the salt and tests that keep them.",
+  "The catalog is not a warehouse dump. Every coral is dipped. Fish sit in quarantine. Plants ship emersed or submerged depending on the species, never as an afterthought in a livestock box.",
+  "If a heat wave or a freeze is sitting on the airport, we hold the order. A late box is better than a cooked one.",
+]));
+app.get("/contact", renderStaticPage("contact", "Contact", [
+  "Questions about a species, a hold, or an order: write the address on your receipt and put the order ID in the subject.",
+  "We read mail in the morning before packs go out. Livestock questions get a real answer, not a script.",
+  "Instagram, YouTube, and Facebook are placeholders in the footer until the shop profiles are live.",
+]));
+app.get("/shipping", renderStaticPage("shipping", "Shipping", [
+  "Live animals and corals leave early in the week, overnight, so nothing sits in a depot over Saturday.",
+  "Plants and dry goods can ship separately if you want them cheaper and slower. We will not mix a clownfish with a four-day ground box.",
+  "Weather holds are not optional. If the route is too hot or too cold, we wait and we tell you. Heat packs and cold packs go in when the forecast earns them.",
+]));
+app.get("/returns", renderStaticPage("returns", "Returns", [
+  "Livestock and coral carry a live-arrival guarantee. Photograph the unopened bag on the day it lands, then write us before you acclimate if something is wrong.",
+  "Unopened dry goods can come back within 30 days for a refund of the item, not the freight.",
+  "Opened salt, used test kits, and livestock that arrived healthy are final sale. We will still help you keep them.",
+]));
+app.get("/care", renderStaticPage("care", "Care guides", [
+  "Plants: most of our stems and rhizomes are low-tech friendly. Never bury an Anubias, Java fern, or Buce rhizome — tie it. Swords and crypts want root tabs. Hairgrass and Monte Carlo want light, or they climb.",
+  "Soft corals and zoas are the honest on-ramp. Moderate light, some flow, and a weekly test. Dip new frags. Palytoxin is not a joke; gloves and no boiling zoa rocks.",
+  "LPS wants stable alkalinity more than fancy lights. Leave space for sweepers. SPS wants that plus strong, messy flow and a lighting schedule you do not keep changing.",
+  "Anemones belong in mature tanks. Quarantine fish. Feed mysis like you mean it. Skim, test, and water-change on a calendar, not a vibe.",
+]));
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+app.get("/admin", async (req, res, next) => {
+  try {
+    if (!isAdminSession(req)) {
+      return res.render("admin_login", {
+        invalidPassword: false,
+        seo: buildSeo("admin"),
+      });
+    }
+
+    const storeSettings = await db.getStoreSettings({
+      storeName: STORE_NAME,
+      storeTagline: STORE_TAGLINE,
+    });
+    res.render("admin", {
+      orders: await db.listOrders(),
+      ipCounts: await db.listIpCounts(),
+      products: await db.listProducts(),
+      storeSettings,
+      storeNameAlt: typeof STORE_NAME_ALT !== "undefined" ? STORE_NAME_ALT : "Citrus & Fern",
+      seo: buildSeo("admin"),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/admin", async (req, res, next) => {
+  try {
+    const provided = String(req.body.password || "");
+    const ok = await verifyAdminPassword(provided);
+    if (!ok) {
+      return res.status(401).render("admin_login", {
+        invalidPassword: true,
+        seo: buildSeo("admin"),
+      });
+    }
+
+    req.session.isAdmin = true;
+    return req.session.save((err) => {
+      if (err) return next(err);
+      return res.redirect(adminUrl());
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/admin/logout", (req, res, next) => {
+  req.session.isAdmin = false;
+  req.session.save((err) => {
+    if (err) return next(err);
+    return res.redirect("/admin");
+  });
+});
+
+/** Reset one IP order counter (or all if ip is empty / "all") */
+app.post("/admin/store-settings", async (req, res, next) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const storeName = String(req.body.store_name || "").trim().slice(0, 120);
+    const storeTagline = String(req.body.store_tagline || "").trim().slice(0, 255);
+    if (!storeName) {
+      return res.status(400).send("Store name is required.");
+    }
+    await db.saveStoreSettings({
+      storeName,
+      storeTagline: storeTagline || STORE_TAGLINE,
+    });
+    return res.redirect(adminUrl({ hash: "store" }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/admin/ip-counts/reset", async (req, res, next) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const ip = String(
+        (req.body && req.body.ip_address) || req.query.ip_address || ""
+      ).trim();
+
+      if (!ip || ip.toLowerCase() === "all") {
+        await db.resetIpCount();
+      } else {
+        await db.resetIpCount(ip);
+      }
+    } catch (err) {
+      console.error("IP counter reset failed:", err);
+    }
+
+    return res.redirect(adminUrl({ hash: "ip-counts" }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Receipt / invoice view for a single order */
+app.get("/admin/orders/:orderId", async (req, res, next) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+
+    const order = await db.getOrder(req.params.orderId);
+    if (!order) {
+      return res.status(404).render("404", { seo: buildSeo("notFound") });
+    }
+
+    const lineItems = await db.getOrderLineItems(order);
+    const subtotal = db.orderSubtotal(lineItems);
+    const hasPrices = lineItems.every((item) => item.unitPrice !== null);
+
+    res.render("admin_order", {
+      order,
+      lineItems,
+      subtotal,
+      hasPrices,
+      seo: buildSeo("admin", {
+        title: `Receipt ${order.order_id_display} — Admin`,
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Add a new product (optional photo upload) */
+app.post("/admin/products", (req, res) => {
+  upload.single("photo")(req, res, async (err) => {
+    try {
+      if (!csrf.verifyParsedCsrf(req, res)) return;
+      if (!requireAdmin(req, res)) return;
+
+      if (err) {
+        return res.redirect(adminUrl({ hash: "add-product" }));
+      }
+
+      const name = String(req.body.name || "").trim();
+      const description = String(req.body.description || "").trim();
+      const price = Number(req.body.price);
+      const qtyAvailable = Number(req.body.qty_available);
+      let id = String(req.body.id || "").trim() || slugify(name);
+
+      if (
+        !name ||
+        !Number.isFinite(price) ||
+        price < 0 ||
+        !Number.isFinite(qtyAvailable) ||
+        qtyAvailable < 0 ||
+        !id
+      ) {
+        return res.redirect(adminUrl({ hash: "add-product" }));
+      }
+
+      // Ensure unique id
+      if (await db.productIdExists(id)) {
+        let n = 2;
+        while (await db.productIdExists(`${id}-${n}`)) n += 1;
+        id = `${id}-${n}`;
+      }
+
+      const image = req.file
+        ? publicUploadPath(req.file.filename)
+        : PLACEHOLDER_IMAGE;
+
+      try {
+        await db.createProduct({
+          id,
+          name,
+          price,
+          description,
+          image,
+          qtyAvailable: Math.floor(qtyAvailable),
+        });
+        return res.redirect(adminUrl({ hash: "products" }));
+      } catch (_e) {
+        return res.redirect(adminUrl({ hash: "add-product" }));
+      }
+    } catch (e) {
+      console.error("Add product failed:", e);
+      return res.redirect(adminUrl({ hash: "add-product" }));
+    }
+  });
+});
+
+/** Update price and quantity available */
+app.post("/admin/products/:productId/update", async (req, res, next) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+
+    const productId = req.params.productId;
+    const product = await db.getProduct(productId);
+    if (!product) {
+      return res.redirect(adminUrl({ hash: "products" }));
+    }
+
+    try {
+      await db.updateProductPricing(productId, {
+        price: req.body.price,
+        qtyAvailable: req.body.qty_available,
+      });
+    } catch (_e) {
+      // Stay on products tab; no toast
+    }
+    return res.redirect(adminUrl({ hash: "products" }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Upload / replace a product photo */
+app.post("/admin/products/:productId/photo", (req, res) => {
+  upload.single("photo")(req, res, async (err) => {
+    try {
+      if (!csrf.verifyParsedCsrf(req, res)) return;
+      if (!requireAdmin(req, res)) return;
+
+      if (err) {
+        return res.redirect(adminUrl({ hash: "products" }));
+      }
+
+      const productId = req.params.productId;
+      const product = await db.getProduct(productId);
+      if (!product || !req.file) {
+        return res.redirect(adminUrl({ hash: "products" }));
+      }
+
+      const image = publicUploadPath(req.file.filename);
+      await db.updateProductImage(productId, image);
+      return res.redirect(adminUrl({ hash: "products" }));
+    } catch (e) {
+      console.error("Photo upload failed:", e);
+      return res.redirect(adminUrl({ hash: "products" }));
+    }
+  });
+});
+
+app.use((req, res) => {
+  res.status(404).render("404", { seo: buildSeo("notFound") });
+});
+
+// Basic error handler for async route failures (e.g. DB down)
+app.use((err, _req, res, _next) => {
+  console.error("[error]", err);
+  res.status(500).send("Internal Server Error");
+});
+
+/**
+ * Wait for MySQL after reboot (PM2 often starts before mysqld is ready).
+ * Retries with backoff. Keeps the HTTP process alive so PM2 has a valid PID.
+ */
+async function initDbWithRetry(options = {}) {
+  const maxAttempts = Number(options.maxAttempts) || 0; // 0 = forever
+  const baseDelayMs = Number(options.baseDelayMs) || 2000;
+  const maxDelayMs = Number(options.maxDelayMs) || 15000;
+  let attempt = 0;
+
+  for (;;) {
+    attempt += 1;
+    try {
+      await db.initDb();
+      if (attempt > 1) {
+        console.log(`[db] Connected to MySQL on attempt ${attempt}`);
+      }
+      return;
+    } catch (err) {
+      const delay = Math.min(baseDelayMs * Math.min(attempt, 10), maxDelayMs);
+      console.error(
+        `[db] MySQL not ready (attempt ${attempt}${
+          maxAttempts ? `/${maxAttempts}` : ""
+        }): ${err.message || err}`
+      );
+      if (maxAttempts > 0 && attempt >= maxAttempts) {
+        throw err;
+      }
+      console.error(`[db] Retrying in ${Math.round(delay / 1000)}s…`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+async function start() {
+  if (
+    isProd &&
+    (!process.env.SESSION_SECRET ||
+      process.env.SESSION_SECRET === "change-me-canopy-goods-session")
+  ) {
+    console.warn(
+      "[warn] Set a strong SESSION_SECRET in .env for production."
+    );
+  }
+
+  if (isProd && !ADMIN_PASSWORD_HASH) {
+    console.warn(
+      "[warn] Prefer ADMIN_PASSWORD_HASH over plaintext ADMIN_PASSWORD in production."
+    );
+  }
+
+  console.log(
+    `[boot] cwd=${process.cwd()} __dirname=${__dirname} PORT=${PORT} HOST=${HOST}`
+  );
+
+  // Bind first so the process stays alive during MySQL wait (valid PM2 PID).
+  await new Promise((resolve, reject) => {
+    const server = app.listen(PORT, HOST, () => {
+      const displayHost = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
+      console.log(
+        `${STORE_NAME} listening at http://${displayHost}:${PORT} (bind ${HOST}) — waiting for MySQL`
+      );
+      resolve(server);
+    });
+    server.on("error", reject);
+  });
+
+  try {
+    await initDbWithRetry();
+    appReady = true;
+    const displayHost = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
+    console.log(`${STORE_NAME} ready at http://${displayHost}:${PORT}`);
+    console.log(`Admin: http://${displayHost}:${PORT}/admin`);
+  } catch (err) {
+    // Only reached if maxAttempts is set; default is infinite retry.
+    console.error(
+      "[fatal] Could not connect to MySQL or initialize schema.",
+      "Check MYSQL_* in .env, that MySQL is running, and that the database exists."
+    );
+    console.error(err.message || err);
+    process.exit(1);
+  }
+}
+
+if (require.main === module) {
+  start();
+}
+
+module.exports = app;

@@ -1,0 +1,21 @@
+<%- include('partials/header') %>
+
+  <h1 class="page-title">Admin access</h1>
+  <p class="page-sub">Enter the admin password to manage the store.</p>
+
+  <div class="panel">
+    <% if (typeof invalidPassword !== 'undefined' && invalidPassword) { %>
+      <div class="alert alert-error">Invalid password.</div>
+    <% } %>
+
+    <form method="post" action="/admin">
+      <%- include('partials/csrf') %>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary">Log in</button>
+    </form>
+  </div>
+
+<%- include('partials/footer') %>
