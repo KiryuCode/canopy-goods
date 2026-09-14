@@ -325,7 +325,7 @@ const DEFAULT_PRODUCTS = [
     id: "pothos-epipremnum-aureum",
     name: "Pothos (Epipremnum aureum)",
     price: 18.0,
-    description: "Classic trailing pothos with heart-shaped variegated leaves. Hang it high and let the vines drape 3–4 feet — bright indirect light, water when the top inch is dry.",
+    description: "4–6 inch pot. Classic trailing pothos with heart-shaped variegated leaves. Hang it high and let the vines drape 3–4 feet — bright indirect light, water when the top inch is dry.",
     image: "/uploads/pothos-window-hang.png",
     category: "Houseplants",
   },
