@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 // Store branding
 // ---------------------------------------------------------------------------
-const STORE_NAME = "Canopy Goods";
+const STORE_NAME = "Garden Goods";
 const STORE_TAGLINE = "Plants for the quiet greenhouse.";
 /** Backup display name Andrew may swap to from admin */
 const STORE_NAME_ALT = "Citrus & Fern";
@@ -121,7 +121,7 @@ const SEO = {
   defaults: {
     title: `${STORE_NAME} — ${STORE_TAGLINE}`,
     description:
-      "Shop houseplants, nursery stock, and garden goods at Canopy Goods.",
+      "Shop houseplants, nursery stock, and garden goods at Garden Goods.",
     keywords:
       "canopy goods, plant shop, nursery, houseplants, garden, citrus, fern",
     /**
@@ -155,7 +155,7 @@ const SEO = {
     home: {
       title: `${STORE_NAME} — Inventory`,
       description:
-        "Browse houseplants, ferns, citrus, herbs, succulents, and nursery goods at Canopy Goods.",
+        "Browse houseplants, ferns, citrus, herbs, succulents, and nursery goods at Garden Goods.",
       keywords:
         "houseplants, nursery, ferns, citrus, herbs, succulents, garden pots",
       path: "/",
@@ -165,14 +165,14 @@ const SEO = {
     cart: {
       title: `Your Cart — ${STORE_NAME}`,
       description:
-        "Review items in your Canopy Goods cart and proceed to checkout.",
+        "Review items in your Garden Goods cart and proceed to checkout.",
       robots: "noindex, follow",
       path: "/cart",
       sitemap: false,
     },
     confirm: {
       title: `Confirm order — ${STORE_NAME}`,
-      description: "Confirm your Canopy Goods order and optionally leave contact details.",
+      description: "Confirm your Garden Goods order and optionally leave contact details.",
       robots: "noindex, nofollow",
       path: "/cart/checkout",
       sitemap: false,
@@ -197,42 +197,42 @@ const SEO = {
     },
     login: {
       title: `Sign in — ${STORE_NAME}`,
-      description: "Sign in to your Canopy Goods account.",
+      description: "Sign in to your Garden Goods account.",
       robots: "noindex, follow",
       path: "/login",
       sitemap: false,
     },
     register: {
       title: `Create account — ${STORE_NAME}`,
-      description: "Register for a Canopy Goods account with your email.",
+      description: "Register for a Garden Goods account with your email.",
       robots: "noindex, follow",
       path: "/register",
       sitemap: false,
     },
     about: {
       title: `About — ${STORE_NAME}`,
-      description: "About Canopy Goods, a plant-forward nursery shop.",
+      description: "About Garden Goods, a plant-forward nursery shop.",
       path: "/about",
       changefreq: "monthly",
       priority: "0.4",
     },
     contact: {
       title: `Contact — ${STORE_NAME}`,
-      description: "Contact Canopy Goods.",
+      description: "Contact Garden Goods.",
       path: "/contact",
       changefreq: "monthly",
       priority: "0.4",
     },
     shipping: {
       title: `Shipping — ${STORE_NAME}`,
-      description: "Shipping details for Canopy Goods plant orders.",
+      description: "Shipping details for Garden Goods plant orders.",
       path: "/shipping",
       changefreq: "monthly",
       priority: "0.3",
     },
     returns: {
       title: `Returns — ${STORE_NAME}`,
-      description: "Returns and plant guarantee for Canopy Goods.",
+      description: "Returns and plant guarantee for Garden Goods.",
       path: "/returns",
       changefreq: "monthly",
       priority: "0.3",
@@ -246,7 +246,7 @@ const SEO = {
     },
     admin: {
       title: `Admin — ${STORE_NAME}`,
-      description: "Canopy Goods administration.",
+      description: "Garden Goods administration.",
       robots: "noindex, nofollow",
       sitemap: false,
     },
