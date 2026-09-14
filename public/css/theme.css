@@ -148,8 +148,8 @@ body {
 .hero-title {
   margin: 0 0 0.7rem;
   font-size: clamp(2.1rem, 5vw, 3.4rem);
-  line-height: 1.05;
-  max-width: 14ch;
+  line-height: 1.08;
+  max-width: none;
 }
 
 .hero-lede {
