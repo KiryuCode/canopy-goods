@@ -96,7 +96,7 @@
         <% if (typeof customer !== 'undefined' && customer) { %>
         <span class="nav-link nav-user"><%= customer.name || customer.email %></span>
         <form method="post" action="/logout" class="inline-form nav-logout">
-          <%- include('partials/csrf') %>
+          <%- include('csrf') %>
           <button type="submit" class="nav-link nav-link-btn">Sign out</button>
         </form>
         <% } else { %>
