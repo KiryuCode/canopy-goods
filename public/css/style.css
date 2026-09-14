@@ -80,25 +80,27 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 0;
-  gap: 1rem;
+  padding: 0.55rem 0;
+  gap: 0.65rem;
 }
 
 .logo {
   display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
 }
 
 .logo-name {
-  font-size: 1.35rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--ocean-foam);
 }
 
 .logo-tagline {
-  font-size: 0.8rem;
+  font-size: 0.62rem;
   color: var(--ocean-mist);
 }
 
