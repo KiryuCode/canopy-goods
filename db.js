@@ -120,6 +120,19 @@ async function initDb() {
   `);
 
   await p.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id INT NOT NULL AUTO_INCREMENT,
+      customer_id INT NOT NULL,
+      token_hash VARCHAR(64) NOT NULL,
+      expires_at VARCHAR(64) NOT NULL,
+      created_at VARCHAR(64) NOT NULL,
+      used_at VARCHAR(64) NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY prt_token_hash (token_hash)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await p.query(`
     CREATE TABLE IF NOT EXISTS orders (
       order_id     INT          NOT NULL AUTO_INCREMENT,
       product_id   TEXT         NOT NULL,
@@ -576,6 +589,53 @@ function publicCustomer(customer) {
   return { id: customer.id, email: customer.email, name: customer.name || "" };
 }
 
+async function updateCustomerPassword(customerId, passwordHash) {
+  await getPool().execute(
+    "UPDATE customers SET password_hash = ? WHERE id = ?",
+    [passwordHash, customerId]
+  );
+  return getCustomerById(customerId);
+}
+
+/**
+ * Store a one-time password-reset token (hash only).
+ * Invalidates any unused tokens for this customer first.
+ */
+async function createPasswordResetToken(customerId, tokenHash, expiresAt) {
+  const createdAt = new Date().toISOString();
+  const p = getPool();
+  await p.execute(
+    "DELETE FROM password_reset_tokens WHERE customer_id = ? AND used_at IS NULL",
+    [customerId]
+  );
+  const [result] = await p.execute(
+    `INSERT INTO password_reset_tokens
+       (customer_id, token_hash, expires_at, created_at, used_at)
+     VALUES (?, ?, ?, ?, NULL)`,
+    [customerId, tokenHash, expiresAt, createdAt]
+  );
+  return result.insertId;
+}
+
+async function getPasswordResetByHash(tokenHash) {
+  const [rows] = await getPool().execute(
+    `SELECT * FROM password_reset_tokens
+     WHERE token_hash = ? AND used_at IS NULL
+     LIMIT 1`,
+    [tokenHash]
+  );
+  return rows[0] || null;
+}
+
+async function markPasswordResetUsed(id) {
+  const usedAt = new Date().toISOString();
+  await getPool().execute(
+    "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
+    [usedAt, id]
+  );
+}
+
+
 /** Close the pool (tests / graceful shutdown). */
 async function closeDb() {
   if (pool) {
@@ -652,6 +712,7 @@ module.exports = {
   getCustomerByEmail,
   getCustomerById,
   createCustomer,
+  updateCustomerPassword,
   publicCustomer,
   ensureStoreSettingsTable,
   getStoreSettings,

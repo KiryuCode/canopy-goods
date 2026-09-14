@@ -684,6 +684,144 @@ app.post("/logout", (req, res, next) => {
   });
 });
 
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour, one-time use
+
+function hashResetToken(rawToken) {
+  return crypto.createHash("sha256").update(String(rawToken)).digest("hex");
+}
+
+function renderForgotPassword(res, extra = {}) {
+  return res.render("forgot-password", {
+    error: null,
+    sent: false,
+    email: "",
+    seo: buildSeo("forgotPassword"),
+    ...extra,
+  });
+}
+
+function renderResetPassword(res, extra = {}) {
+  return res.render("reset-password", {
+    error: null,
+    invalid: false,
+    done: false,
+    token: "",
+    seo: buildSeo("resetPassword"),
+    ...extra,
+  });
+}
+
+app.get("/forgot-password", (req, res) => {
+  if (req.session && req.session.customer) {
+    return res.redirect("/");
+  }
+  return renderForgotPassword(res);
+});
+
+app.post("/forgot-password", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const genericSent = () =>
+      renderForgotPassword(res, { sent: true, email });
+
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).render("forgot-password", {
+        error: "Enter a valid email address.",
+        sent: false,
+        email,
+        seo: buildSeo("forgotPassword"),
+      });
+    }
+
+    const customer = await db.getCustomerByEmail(email);
+    if (!customer) {
+      // Same response either way — do not leak account existence.
+      return genericSent();
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashResetToken(rawToken);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+    await db.createPasswordResetToken(customer.id, tokenHash, expiresAt);
+
+    const resetUrl = `${SITE_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
+    await mail.sendPasswordReset({
+      email: customer.email,
+      name: customer.name,
+      resetUrl,
+      expiresMinutes: Math.round(PASSWORD_RESET_TTL_MS / 60000),
+    });
+
+    return genericSent();
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/reset-password", async (req, res, next) => {
+  try {
+    const token = String(req.query.token || "").trim();
+    if (!token) {
+      return renderResetPassword(res, { invalid: true });
+    }
+    const row = await db.getPasswordResetByHash(hashResetToken(token));
+    if (!row || new Date(row.expires_at).getTime() < Date.now()) {
+      return renderResetPassword(res, { invalid: true });
+    }
+    return renderResetPassword(res, { token });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/reset-password", async (req, res, next) => {
+  try {
+    const token = String(req.body.token || "").trim();
+    const password = String(req.body.password || "");
+    const password2 = String(req.body.password2 || "");
+
+    const row = token
+      ? await db.getPasswordResetByHash(hashResetToken(token))
+      : null;
+    if (!row || new Date(row.expires_at).getTime() < Date.now()) {
+      return res.status(400).render("reset-password", {
+        error: null,
+        invalid: true,
+        done: false,
+        token: "",
+        seo: buildSeo("resetPassword"),
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).render("reset-password", {
+        error: "Password must be at least 8 characters.",
+        invalid: false,
+        done: false,
+        token,
+        seo: buildSeo("resetPassword"),
+      });
+    }
+    if (password !== password2) {
+      return res.status(400).render("reset-password", {
+        error: "Passwords do not match.",
+        invalid: false,
+        done: false,
+        token,
+        seo: buildSeo("resetPassword"),
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    await db.updateCustomerPassword(row.customer_id, passwordHash);
+    await db.markPasswordResetUsed(row.id);
+
+    return renderResetPassword(res, { done: true, token: "" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 function renderStaticPage(pageKey, heading, bodyLines) {
   return (req, res) => {
     res.render("static", {

@@ -6,7 +6,7 @@
  */
 
 const nodemailer = require("nodemailer");
-const { STORE_NAME, STORE_TAGLINE, formatPrice } = require("./config");
+const { STORE_NAME, STORE_TAGLINE, SITE_URL, formatPrice } = require("./config");
 
 function env(name, fallback = "") {
   const v = process.env[name];
@@ -244,8 +244,66 @@ async function sendOrderConfirmation({ order, lineItems, subtotal, hasPrices }) 
   }
 }
 
+
+/**
+ * Send a one-time password-reset link.
+ * Never throws — logs errors so the forgot-password form stays generic.
+ */
+async function sendPasswordReset({ email, name, resetUrl, expiresMinutes }) {
+  if (!isMailConfigured()) {
+    console.warn(
+      "[mail] SMTP_HOST / SMTP_USER / SMTP_PASS not fully set — skipping password reset email"
+    );
+    return { skipped: true, reason: "SMTP not configured" };
+  }
+  const to = String(email || "").trim();
+  if (!to) {
+    return { skipped: true, reason: "no recipients" };
+  }
+  const from = env("SMTP_FROM") || env("SMTP_USER");
+  const minutes = Number(expiresMinutes) || 60;
+  const displayName = String(name || "").trim() || "there";
+  const safeUrl = escapeHtml(resetUrl);
+  const html = `
+  <div style="font-family:Georgia,serif;max-width:560px;margin:0 auto;color:#1a2e1a;">
+    <h1 style="font-size:22px;margin:0 0 12px;">Reset your ${escapeHtml(STORE_NAME)} password</h1>
+    <p style="margin:0 0 16px;">Hi ${escapeHtml(displayName)},</p>
+    <p style="margin:0 0 16px;">We got a request to reset the password on this account. This link works once and expires in ${minutes} minutes:</p>
+    <p style="margin:0 0 20px;"><a href="${safeUrl}" style="display:inline-block;padding:10px 16px;background:#2f5d3a;color:#fff;text-decoration:none;border-radius:6px;">Choose a new password</a></p>
+    <p style="margin:0 0 12px;font-size:13px;word-break:break-all;">Or paste this URL:<br>${safeUrl}</p>
+    <p style="margin:0;font-size:13px;opacity:0.8;">If you did not ask for this, you can ignore the email — your password stays the same.</p>
+  </div>`;
+  const text = [
+    `Reset your ${STORE_NAME} password`,
+    "",
+    `Hi ${displayName},`,
+    "",
+    `Use this one-time link within ${minutes} minutes:`,
+    resetUrl,
+    "",
+    "If you did not ask for this, ignore the email.",
+  ].join("\n");
+
+  try {
+    const transport = createTransport();
+    const info = await transport.sendMail({
+      from,
+      to,
+      subject: `${STORE_NAME} — password reset`,
+      text,
+      html,
+    });
+    console.log(`[mail] Password reset sent to ${to}`, info.messageId || "");
+    return { ok: true, messageId: info.messageId, to };
+  } catch (err) {
+    console.error("[mail] Failed to send password reset:", err.message || err);
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
 module.exports = {
   isMailConfigured,
   sendOrderConfirmation,
+  sendPasswordReset,
   buildReceiptHtml,
 };

@@ -209,6 +209,20 @@ const SEO = {
       path: "/register",
       sitemap: false,
     },
+    forgotPassword: {
+      title: `Forgot password — ${STORE_NAME}`,
+      description: "Request a one-time password reset link.",
+      robots: "noindex, nofollow",
+      path: "/forgot-password",
+      sitemap: false,
+    },
+    resetPassword: {
+      title: `Reset password — ${STORE_NAME}`,
+      description: "Choose a new password with a one-time reset link.",
+      robots: "noindex, nofollow",
+      path: "/reset-password",
+      sitemap: false,
+    },
     about: {
       title: `About — ${STORE_NAME}`,
       description: "About Garden Goods, a plant-forward nursery shop.",
