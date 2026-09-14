@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploy Ocean Market over SSH as a Docker Compose stack.
+# Deploy Garden Goods (canopy-goods) over SSH as a Docker Compose stack.
 # Required env: HOST, REMOTE_USER, REMOTE_DIR
 # Optional: SSH_KEY
+# Production: root@74.208.35.191 → /var/www/canopy-goods → 127.0.0.1:4842
 set -euo pipefail
 
 HOST="${HOST:?HOST is required}"
@@ -43,6 +44,7 @@ rsync -avz \
   csrf.js \
   db.js \
   mail.js \
+  sqlite-pool.js \
   package.json \
   package-lock.json \
   Dockerfile \
@@ -102,7 +104,7 @@ upsert_env NODE_ENV production
 
 # SEO origin was left at the loopback URL from the PM2 era.
 if grep -qE '^[[:space:]]*SITE_URL=http://127\.0\.0\.1' .env; then
-  upsert_env SITE_URL https://adavis.shop
+  upsert_env SITE_URL https://gardengoods.adavis.shop
 fi
 
 mkdir -p public/uploads/products
@@ -110,18 +112,17 @@ mkdir -p public/uploads/products
 chown -R 1000:1000 public/uploads
 chmod 600 .env
 
-echo "==> Retiring PM2 process (if present)"
+echo "==> Retiring canopy-goods PM2 process (if present)"
 export PATH="/usr/local/bin:/usr/bin:$HOME/.local/bin:$PATH"
-if command -v pm2 >/dev/null 2>&1 && pm2 describe ocean-market >/dev/null 2>&1; then
-  pm2 delete ocean-market
-  # Empty list still needs --force so a reboot does not restore the old dump
+if command -v pm2 >/dev/null 2>&1 && pm2 describe canopy-goods >/dev/null 2>&1; then
+  pm2 delete canopy-goods
   pm2 save --force || true
 fi
 
 if command -v nginx >/dev/null 2>&1 && [ -f /etc/nginx/nginx.conf ]; then
   echo "==> Hide nginx version (server_tokens off)"
   # A second server_tokens in conf.d is a duplicate and fails nginx -t.
-  rm -f /etc/nginx/conf.d/ocean-market-security.conf
+  rm -f /etc/nginx/conf.d/canopy-goods-security.conf
   if grep -qE '^[[:space:]]*server_tokens[[:space:]]+' /etc/nginx/nginx.conf; then
     sed -i -E 's/^[[:space:]]*server_tokens[[:space:]]+[^;]+;/    server_tokens off;/' \
       /etc/nginx/nginx.conf
