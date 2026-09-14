@@ -100,8 +100,12 @@ a:hover {
 }
 
 .logo-tagline {
-  font-size: 0.62rem;
+  font-size: 0.72rem;
   color: var(--ocean-mist);
+  text-transform: none;
+  white-space: normal;
+  max-width: 9.5ch;
+  line-height: 1.15;
 }
 
 .site-nav {

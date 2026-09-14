@@ -39,9 +39,8 @@ body {
 .logo {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem 0.65rem;
+  gap: 0.7rem;
   line-height: 1.1;
 }
 
@@ -77,12 +76,18 @@ body {
   white-space: nowrap;
 }
 
+/* Poetic tagline: "something" / "that stays." beside the mark+name */
 .logo-tagline {
-  font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  display: block;
+  max-width: 9.5ch;
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  text-transform: none;
+  white-space: normal;
   color: var(--ocean-mist);
-  white-space: nowrap;
 }
 
 .nav-cta {
