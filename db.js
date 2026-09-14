@@ -587,12 +587,13 @@ async function closeDb() {
 
 async function ensureStoreSettingsTable() {
   const p = getPool();
+  // Keep DDL sqlite-friendly (sql.js / SQLITE_FILE) and MySQL-compatible.
   await p.query(`
     CREATE TABLE IF NOT EXISTS store_settings (
-      id TINYINT NOT NULL PRIMARY KEY,
+      id INTEGER NOT NULL PRIMARY KEY,
       store_name VARCHAR(120) NOT NULL,
       store_tagline VARCHAR(255) NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      updated_at TEXT
     )
   `);
 }
@@ -618,11 +619,13 @@ async function getStoreSettings(defaults) {
 async function saveStoreSettings({ storeName, storeTagline }) {
   await ensureStoreSettingsTable();
   const p = getPool();
+  const now = new Date().toISOString();
+  // DELETE+INSERT works on both MySQL and sql.js (no ON DUPLICATE KEY).
+  await p.query("DELETE FROM store_settings WHERE id = 1");
   await p.query(
-    `INSERT INTO store_settings (id, store_name, store_tagline)
-     VALUES (1, ?, ?)
-     ON DUPLICATE KEY UPDATE store_name = VALUES(store_name), store_tagline = VALUES(store_tagline)`,
-    [storeName, storeTagline]
+    `INSERT INTO store_settings (id, store_name, store_tagline, updated_at)
+     VALUES (1, ?, ?, ?)`,
+    [storeName, storeTagline, now]
   );
 }
 
