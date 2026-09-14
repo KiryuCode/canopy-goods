@@ -11,7 +11,7 @@
 // Store branding
 // ---------------------------------------------------------------------------
 const STORE_NAME = "Garden Goods";
-const STORE_TAGLINE = "Plants for the quiet greenhouse.";
+const STORE_TAGLINE = "something that stays.";
 /** Backup display name Andrew may swap to from admin */
 const STORE_NAME_ALT = "Citrus & Fern";
 
