@@ -8,7 +8,7 @@ Production:
 - Container published as `127.0.0.1:4842` (`HOST_BIND=127.0.0.1`, `PORT=4842`)
 - nginx reverse-proxies **gardengoods.adavis.shop** and **gg.adavis.shop** → that loopback port
 - MySQL: Aiven database `canopy` (same host as ocean-market; see server `.env`)
-- Local compose sidecar MySQL (dev) binds `127.0.0.1:3308` — do **not** reuse ocean’s `:3307` / app `:4840` / chllc `:4841`
+- Compose is **web-only** (no local MySQL sidecar). Prod MySQL is Aiven `canopy` via `.env`.
 
 ## Bind map (zen88)
 
