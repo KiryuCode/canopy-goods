@@ -369,3 +369,95 @@ a.btn {
     url("/uploads/pothos-window-hang.png") center 30%/cover no-repeat;
 }
 
+
+/* ---------- Auth / account forms (forgot + reset + login polish) ---------- */
+
+.page-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ocean-foam);
+}
+
+.page-sub {
+  color: rgba(238, 246, 238, 0.78);
+}
+
+.page-sub a {
+  color: var(--citrus);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(224, 160, 74, 0.35);
+}
+
+.page-sub a:hover {
+  color: #f0b85c;
+  border-bottom-color: rgba(240, 184, 92, 0.7);
+}
+
+.auth-kicker {
+  margin: 0 0 0.45rem;
+  color: var(--citrus);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.panel {
+  background: linear-gradient(160deg, rgba(36, 61, 46, 0.98), rgba(21, 38, 27, 0.98));
+  border: 1px solid rgba(111, 191, 115, 0.22);
+  box-shadow: 0 14px 36px rgba(0, 10, 4, 0.32);
+}
+
+.form-group label {
+  color: rgba(238, 246, 238, 0.92);
+}
+
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group input[type="text"],
+.form-group input[type="tel"] {
+  border: 1px solid rgba(111, 191, 115, 0.28);
+  background: rgba(12, 22, 16, 0.72);
+  color: var(--ocean-foam);
+  border-radius: 11px;
+}
+
+.form-group input:focus {
+  outline: 2px solid rgba(224, 160, 74, 0.55);
+  outline-offset: 1px;
+  border-color: var(--citrus);
+  box-shadow: 0 0 0 3px rgba(111, 191, 115, 0.12);
+}
+
+.btn-secondary,
+a.btn-secondary {
+  background: transparent;
+  color: var(--ocean-mist);
+  border: 1px solid rgba(111, 191, 115, 0.35);
+}
+
+.btn-secondary:hover,
+a.btn-secondary:hover {
+  background: rgba(36, 61, 46, 0.85);
+  color: var(--ocean-foam);
+  border-color: rgba(224, 160, 74, 0.45);
+}
+
+.alert-success {
+  background: rgba(111, 191, 115, 0.12);
+  border: 1px solid rgba(111, 191, 115, 0.4);
+  color: #b7ebc0;
+}
+
+.alert-error {
+  background: rgba(255, 107, 138, 0.1);
+  border: 1px solid rgba(255, 107, 138, 0.38);
+  color: #ffb3c1;
+}
+
+.meta-chip {
+  background: rgba(36, 61, 46, 0.85);
+  border: 1px solid rgba(111, 191, 115, 0.28);
+  color: var(--ocean-mist);
+}

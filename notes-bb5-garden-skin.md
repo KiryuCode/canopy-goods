@@ -8,3 +8,7 @@
 - Centered single-card layout, taller media for window-hang art
 - Show product description on solo cards
 - Hero uses `/uploads/pothos-window-hang.png`
+
+## Auth form skin
+- theme.css overrides for panels/inputs/alerts/secondary buttons (leaf + citrus)
+- auth-kicker on forgot / reset / login
